@@ -592,6 +592,10 @@
                     badgeClass = 'badge-ng';
                     statusText = '✗ 在庫不足';
                     ngCount++;
+                } else if (item.status === 'NOT_FOUND') {
+                    statusClass = 'status-error';
+                    badgeClass = 'badge-error';
+                    statusText = '📝 登録なし';
                 } else {
                     statusClass = 'status-error';
                     badgeClass = 'badge-error';
