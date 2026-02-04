@@ -248,12 +248,15 @@ def check_items_inventory(items):
         else:
             results.append({
                 'hinban': hinban,
-                'name': '-',
+                'name': 'Zaico未登録',
                 'required_qty': required_qty,
                 'current_qty': 0,
-                'unit': '個',
-                'status': 'ERROR',
-                'error': inventory_info['error']
+                'unit': '-',
+                'status': 'NOT_FOUND',
+                'shortage': required_qty,
+                'zaico_code': '',
+                'zaico_id': '',
+                'updated_at': ''
             })
     
     return results
