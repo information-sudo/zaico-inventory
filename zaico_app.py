@@ -4,12 +4,20 @@ import requests
 import PyPDF2
 import re
 from io import BytesIO
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
 # Zaico API設定
 ZAICO_API_TOKEN = "jrmXaweTqNZdPN9HCiSF7VGskW2NBCPY"
 ZAICO_API_BASE_URL = "https://web.zaico.co.jp/api/v1"
+
+# キャッシュ設定
+inventory_cache = {
+    'data': [],
+    'timestamp': None,
+    'ttl': 300  # 5分間有効
+}
 
 def extract_items_from_pdf(pdf_file):
     """受注票PDFから品番と数量を抽出"""
@@ -63,28 +71,42 @@ def get_total_pages():
         
         if response.status_code == 200:
             link_header = response.headers.get('Link', '')
-            # rel="last"の直前のpage番号を抽出（per_pageを除外）
             match = re.search(r'page=(\d+)&per_page=\d+>; rel="last"', link_header)
             if match:
                 return int(match.group(1))
         
-        return 10  # デフォルト10ページ
+        return 10
     except Exception as e:
         print(f"総ページ数取得エラー: {e}")
         return 10
 
-def search_zaico_inventory(hinban):
-    """全ページを検索して品番を探す（optional_attributes対応）"""
+def load_all_inventories():
+    """全在庫データを一括取得してキャッシュ"""
+    global inventory_cache
+    
+    # キャッシュが有効かチェック
+    if inventory_cache['timestamp']:
+        elapsed = datetime.now() - inventory_cache['timestamp']
+        if elapsed.total_seconds() < inventory_cache['ttl']:
+            print(f"✓ キャッシュを使用（残り有効時間: {int(inventory_cache['ttl'] - elapsed.total_seconds())}秒）")
+            return inventory_cache['data']
+    
+    print("📦 全在庫データを取得中...")
+    
     headers = {
         "Authorization": f"Bearer {ZAICO_API_TOKEN}",
         "Content-Type": "application/json"
     }
     
+    all_inventories = []
+    
     try:
-        total_pages = min(get_total_pages(), 20)  # 最大20ページに制限
+        total_pages = min(get_total_pages(), 20)  # 最大20ページ
+        print(f"📄 全 {total_pages} ページを取得します...")
         
         for page in range(1, total_pages + 1):
-            print(f"ページ {page}/{total_pages} を検索中...")
+            print(f"  ページ {page}/{total_pages} 取得中...", end=' ')
+            
             response = requests.get(
                 f"{ZAICO_API_BASE_URL}/inventories",
                 headers=headers,
@@ -93,52 +115,72 @@ def search_zaico_inventory(hinban):
             )
             
             if response.status_code != 200:
-                print(f"ページ {page} 取得失敗: {response.status_code}")
+                print(f"❌ 失敗 (status: {response.status_code})")
                 continue
             
             data = response.json()
             
             if not data:
-                print(f"ページ {page} にデータなし。検索終了")
+                print("⚠ データなし")
                 break
             
-            # 各データを検索
-            for inventory in data:
-                # optional_attributesから品番を検索
-                optional_attrs = inventory.get('optional_attributes', [])
-                hinban_value = ''
-                
-                for attr in optional_attrs:
-                    if attr.get('name') == '品番':
-                        hinban_value = attr.get('value', '')
-                        break
-                
-                # 品番が一致するかチェック
-                if hinban_value == hinban:
-                    print(f"✓ 品番 {hinban} を発見（ページ {page}）")
-                    return {
-                        'success': True,
-                        'hinban': hinban_value,
-                        'name': inventory.get('title', ''),
-                        'quantity': float(inventory.get('quantity', 0) or 0),
-                        'unit': inventory.get('unit', '個'),
-                        'zaico_code': inventory.get('code', ''),
-                        'zaico_id': inventory.get('id', ''),
-                        'category': inventory.get('category', ''),
-                        'updated_at': inventory.get('updated_at', '')
-                    }
+            all_inventories.extend(data)
+            print(f"✓ {len(data)}件")
         
-        print(f"✗ 品番 {hinban} は {total_pages} ページ内に見つかりませんでした")
-        return {
-            'success': False,
-            'error': '品番が見つかりませんでした'
-        }
+        # キャッシュを更新
+        inventory_cache['data'] = all_inventories
+        inventory_cache['timestamp'] = datetime.now()
+        
+        print(f"✅ 合計 {len(all_inventories)} 件の在庫データを取得しました")
+        
+        return all_inventories
         
     except Exception as e:
+        print(f"❌ エラー: {e}")
+        return []
+
+def search_zaico_inventory(hinban):
+    """キャッシュから品番を検索"""
+    print(f"🔍 品番 {hinban} を検索中...")
+    
+    # 全在庫データを取得（キャッシュから）
+    all_inventories = load_all_inventories()
+    
+    if not all_inventories:
         return {
             'success': False,
-            'error': f'通信エラー: {str(e)}'
+            'error': '在庫データの取得に失敗しました'
         }
+    
+    # キャッシュから検索
+    for inventory in all_inventories:
+        optional_attrs = inventory.get('optional_attributes', [])
+        hinban_value = ''
+        
+        for attr in optional_attrs:
+            if attr.get('name') == '品番':
+                hinban_value = attr.get('value', '')
+                break
+        
+        if hinban_value == hinban:
+            print(f"  ✓ 品番 {hinban} を発見")
+            return {
+                'success': True,
+                'hinban': hinban_value,
+                'name': inventory.get('title', ''),
+                'quantity': float(inventory.get('quantity', 0) or 0),
+                'unit': inventory.get('unit', '個'),
+                'zaico_code': inventory.get('code', ''),
+                'zaico_id': inventory.get('id', ''),
+                'category': inventory.get('category', ''),
+                'updated_at': inventory.get('updated_at', '')
+            }
+    
+    print(f"  ✗ 品番 {hinban} が見つかりませんでした")
+    return {
+        'success': False,
+        'error': '品番が見つかりませんでした'
+    }
 
 @app.route('/')
 def index():
@@ -221,7 +263,7 @@ def check_items_inventory(items):
         hinban = item['hinban']
         required_qty = item['quantity']
         
-        print(f"品番 {hinban} （必要数: {required_qty}）を検索中...")
+        print(f"品番 {hinban} （必要数: {required_qty}）")
         inventory_info = search_zaico_inventory(hinban)
         
         if inventory_info['success']:
