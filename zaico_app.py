@@ -309,15 +309,21 @@ def check_items_inventory(items):
 
 @app.route('/get_related_parts', methods=['POST'])
 def get_related_parts():
-    """製品分類が同じ部品・製品を取得"""
+    """製品分類が同じ部品・製品を取得（サイズフィルタリング付き）"""
     data = request.get_json()
     category = data.get('category', '').strip()
     shortage = data.get('shortage', 0)
+    product_name = data.get('product_name', '').strip()
     
     if not category:
         return jsonify({'error': '製品分類が指定されていません'}), 400
     
     print(f"\n=== 製品分類 {category} の関連部品を検索 ===")
+    print(f"  不足製品: {product_name}")
+    
+    # 不足品からサイズを抽出
+    target_sizes = extract_sizes(product_name)
+    print(f"  抽出されたサイズ: {target_sizes}")
     
     # 全在庫データから同じ製品分類を検索
     all_inventories = load_all_inventories()
@@ -325,6 +331,16 @@ def get_related_parts():
     related_parts = []
     for inventory in all_inventories:
         if inventory.get('category', '') == category:
+            inventory_name = inventory.get('title', '')
+            
+            # サイズフィルタリング
+            if target_sizes:
+                inventory_sizes = extract_sizes(inventory_name)
+                if not inventory_sizes:
+                    continue  # サイズがない場合は除外
+                if not sizes_match(target_sizes, inventory_sizes):
+                    continue  # サイズが一致しない
+            
             quantity = float(inventory.get('quantity', 0) or 0)
             
             # 警告判定: 不足数より在庫が少ない
@@ -340,7 +356,7 @@ def get_related_parts():
             
             related_parts.append({
                 'hinban': hinban_value,
-                'name': inventory.get('title', ''),
+                'name': inventory_name,
                 'quantity': quantity,
                 'unit': inventory.get('unit', '個'),
                 'zaico_code': inventory.get('code', ''),
@@ -348,13 +364,52 @@ def get_related_parts():
                 'warning': warning
             })
     
-    print(f"  ✓ {len(related_parts)} 件の関連部品を発見")
+    print(f"  ✓ {len(related_parts)} 件の関連部品を発見（サイズフィルタ適用後）")
     
     return jsonify({
         'category': category,
         'shortage': shortage,
+        'product_name': product_name,
+        'target_sizes': target_sizes,
         'parts': related_parts
     })
+
+def extract_sizes(text):
+    """品名からサイズを抽出（mm, A, インチ）"""
+    sizes = set()
+    
+    # mmサイズ: 10mm, 13mm, 16mm, 20mm, 25mm, 32mm etc.
+    mm_matches = re.findall(r'(\d+)\s*mm', text, re.IGNORECASE)
+    for m in mm_matches:
+        sizes.add(int(m))
+    
+    # Aサイズ: 10A, 13A, 16A, 20A, 25A, 32A etc.
+    a_matches = re.findall(r'(\d+)\s*A(?![a-zA-Z])', text)
+    for m in a_matches:
+        sizes.add(int(m))
+    
+    # インチサイズをmmに変換
+    inch_map = {
+        '3/8': 10,
+        '1/2': 13,
+        '5/8': 16,
+        '3/4': 20,
+        '1': 25,
+        '1 1/4': 32,
+        '1 1/2': 40,
+        '2': 50
+    }
+    
+    for inch_str, mm_size in inch_map.items():
+        # インチ表記を検索: ( 1/2 ), (1/2), 1/2
+        if f'({inch_str})' in text or f'( {inch_str} )' in text or f' {inch_str} ' in text:
+            sizes.add(mm_size)
+    
+    return sizes
+
+def sizes_match(sizes1, sizes2):
+    """サイズが一致するか判定"""
+    return bool(sizes1 & sizes2)  # 交差があればTrue
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
