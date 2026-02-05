@@ -1,19 +1,18 @@
-# Zaico Inventory Check App - Option A (PDF + Manual Input)
+# Zaico Inventory Check App - Complete Version with PDF Support
 # Updated: 2026-02-05
-# Feature: PDF受注伝票アップロード + 手動入力 + 関連部品検索（サイズなし共通部品対応）
+# Feature: PDF受注伝票読み込み + 手動入力 + 関連部品検索（サイズなし共通部品対応）
 
 from flask import Flask, render_template, request, jsonify
 import requests
 import re
 import os
 import io
-from collections import defaultdict
 
 app = Flask(__name__)
 
 # Zaico API設定
 ZAICO_API_URL = 'https://web.zaico.co.jp/api/v1/inventories'
-ZAICO_TOKEN = os.environ.get('ZAICO_TOKEN', None)  # 環境変数またはユーザー入力
+ZAICO_TOKEN = os.environ.get('ZAICO_TOKEN', None)
 
 # サイズパターン（mm表記）
 SIZE_PATTERNS = [
@@ -88,35 +87,77 @@ def get_all_inventory_data():
         return None, str(e)
 
 def extract_hinban_from_pdf(pdf_file):
-    """PDFから品番を抽出（簡易版 - 実際はPDF解析ライブラリが必要）"""
-    # 注意: この関数は簡易実装です
-    # 本番環境では PyPDF2 や pdfplumber などを使用してください
+    """PDFから品番と数量を抽出"""
+    items = []
     
-    # 仮実装: PDFファイル名から品番を推測
-    # 例: "order_0215-21-13.pdf" -> "0215-21-13"
-    filename = pdf_file.filename
-    
-    # 品番パターンを検索 (XXXX-XX-XX 形式)
-    pattern = r'\d{4}-\d{2}-\d{2,4}'
-    matches = re.findall(pattern, filename)
-    
-    if matches:
-        # 品番と数量のリストを返す（数量は1と仮定）
-        return [{'hinban': match, 'quantity': 1} for match in matches]
-    
-    # PDFの内容から抽出する場合は以下を使用
-    # try:
-    #     import PyPDF2
-    #     pdf_reader = PyPDF2.PdfReader(pdf_file)
-    #     text = ""
-    #     for page in pdf_reader.pages:
-    #         text += page.extract_text()
-    #     matches = re.findall(pattern, text)
-    #     return [{'hinban': match, 'quantity': 1} for match in matches]
-    # except:
-    #     pass
-    
-    return []
+    try:
+        # PyPDF2を使用してPDFを解析
+        try:
+            import PyPDF2
+            
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            text = ""
+            
+            # 全ページのテキストを抽出
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            
+        except ImportError:
+            # PyPDF2がない場合はpdfplumberを試す
+            try:
+                import pdfplumber
+                
+                with pdfplumber.open(pdf_file) as pdf:
+                    text = ""
+                    for page in pdf.pages:
+                        text += page.extract_text() + "\n"
+            except ImportError:
+                # どちらもない場合はファイル名から抽出を試みる
+                filename = pdf_file.filename
+                pattern = r'\d{4}-\d{2}-\d{2,4}'
+                matches = re.findall(pattern, filename)
+                if matches:
+                    return [{'hinban': match, 'quantity': 1} for match in matches]
+                return []
+        
+        # テキストから品番を抽出
+        # パターン1: XXXX-XX-XX 形式（ハイフン区切り）
+        pattern1 = r'(\d{4}-\d{2}-\d{2,4})'
+        matches1 = re.findall(pattern1, text)
+        
+        # パターン2: 品番と数量が同じ行にある場合
+        # 例: "0215-21-13    5個" または "0215-21-13 | 5"
+        pattern2 = r'(\d{4}-\d{2}-\d{2,4})[^\d]*(\d+)'
+        matches2 = re.findall(pattern2, text)
+        
+        if matches2:
+            # 品番と数量のペアが見つかった場合
+            seen = set()
+            for hinban, qty_str in matches2:
+                if hinban not in seen:
+                    try:
+                        qty = int(qty_str)
+                        # 数量が異常に大きい場合は1とする（誤抽出対策）
+                        if qty > 10000:
+                            qty = 1
+                        items.append({'hinban': hinban, 'quantity': qty})
+                        seen.add(hinban)
+                    except:
+                        items.append({'hinban': hinban, 'quantity': 1})
+                        seen.add(hinban)
+        elif matches1:
+            # 品番のみが見つかった場合（数量は1とする）
+            seen = set()
+            for hinban in matches1:
+                if hinban not in seen:
+                    items.append({'hinban': hinban, 'quantity': 1})
+                    seen.add(hinban)
+        
+        return items
+        
+    except Exception as e:
+        print(f"PDF extraction error: {str(e)}")
+        return []
 
 @app.route('/')
 def index():
@@ -147,7 +188,7 @@ def check_inventory():
         items = extract_hinban_from_pdf(pdf_file)
         
         if not items:
-            return jsonify({'error': 'PDFから品番を抽出できませんでした'}), 400
+            return jsonify({'error': 'PDFから品番を抽出できませんでした。品番形式: XXXX-XX-XX'}), 400
         
         # 各品番の在庫を確認
         inventories, error = get_all_inventory_data()
