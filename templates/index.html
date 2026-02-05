@@ -679,7 +679,7 @@
                 // アクションボタン
                 let actionBtn = '';
                 if (item.status === 'NG' && item.category) {
-                    actionBtn = `<button class="related-btn" onclick="showRelatedParts('${item.category}', ${item.shortage})">🔍 関連部品</button>`;
+                    actionBtn = `<button class="related-btn" onclick="showRelatedParts('${item.category}', ${item.shortage}, '${item.name.replace(/'/g, "\\'")}')">🔍 関連部品</button>`;
                 }
                 
                 row.innerHTML = `
@@ -722,14 +722,18 @@
         }
 
         // 関連部品表示
-        async function showRelatedParts(category, shortage) {
+        async function showRelatedParts(category, shortage, productName) {
             try {
                 const response = await fetch('/get_related_parts', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ category, shortage })
+                    body: JSON.stringify({ 
+                        category, 
+                        shortage,
+                        product_name: productName 
+                    })
                 });
                 
                 const data = await response.json();
@@ -746,10 +750,16 @@
         }
 
         function displayRelatedParts(data) {
+            const sizesText = data.target_sizes && data.target_sizes.length > 0 
+                ? `サイズフィルタ: ${data.target_sizes.join(', ')}mm` 
+                : 'サイズフィルタなし';
+            
             let html = `
                 <div style="background: white; padding: 20px; border-radius: 10px; margin-top: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #667eea; margin-bottom: 15px;">🔍 製品分類: ${data.category} の関連部品・製品 (${data.parts.length}件)</h3>
-                    <p style="margin-bottom: 20px; color: #666;">不足数: <strong style="color: #dc3545;">${data.shortage}</strong> → <span style="color: #856404;">⚠️ この数より少ない部品は警告表示</span></p>
+                    <h3 style="color: #667eea; margin-bottom: 10px;">🔍 製品分類: ${data.category} の関連部品・製品 (${data.parts.length}件)</h3>
+                    <p style="margin-bottom: 5px; color: #666; font-size: 0.95em;">不足製品: <strong>${data.product_name || '-'}</strong></p>
+                    <p style="margin-bottom: 5px; color: #666;">不足数: <strong style="color: #dc3545;">${data.shortage}</strong> → <span style="color: #856404;">⚠️ この数より少ない部品は警告表示</span></p>
+                    <p style="margin-bottom: 20px; color: #17a2b8; font-weight: bold; font-size: 0.9em;">🔍 ${sizesText}</p>
                     <table class="results-table">
                         <thead>
                             <tr>
