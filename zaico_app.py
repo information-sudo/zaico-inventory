@@ -1,4 +1,4 @@
-# Zaico Inventory Check App - Complete Version with PDF Support
+# Zaico Inventory Check App - Complete Version with PDF Support (Fixed)
 # Updated: 2026-02-05
 # Feature: PDF受注伝票読み込み + 手動入力 + 関連部品検索（サイズなし共通部品対応）
 
@@ -82,7 +82,15 @@ def get_all_inventory_data():
         response = requests.get(ZAICO_API_URL, headers=headers, params={'per_page': 1000})
         response.raise_for_status()
         data = response.json()
-        return data.get('inventories', []), None
+        
+        # Zaico APIはlistまたはdictを返す可能性がある
+        if isinstance(data, list):
+            # dataがlistの場合、そのまま返す
+            return data, None
+        else:
+            # dataがdictの場合、'inventories'キーを取得
+            return data.get('inventories', []), None
+            
     except requests.exceptions.RequestException as e:
         return None, str(e)
 
