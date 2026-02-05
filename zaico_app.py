@@ -288,7 +288,8 @@ def check_items_inventory(items):
                 'shortage': max(0, required_qty - current_qty),
                 'zaico_code': inventory_info.get('zaico_code', ''),
                 'zaico_id': inventory_info.get('zaico_id', ''),
-                'updated_at': inventory_info.get('updated_at', '')
+                'updated_at': inventory_info.get('updated_at', ''),
+                'category': inventory_info.get('category', '')
             })
         else:
             results.append({
@@ -305,6 +306,55 @@ def check_items_inventory(items):
             })
     
     return results
+
+@app.route('/get_related_parts', methods=['POST'])
+def get_related_parts():
+    """製品分類が同じ部品・製品を取得"""
+    data = request.get_json()
+    category = data.get('category', '').strip()
+    shortage = data.get('shortage', 0)
+    
+    if not category:
+        return jsonify({'error': '製品分類が指定されていません'}), 400
+    
+    print(f"\n=== 製品分類 {category} の関連部品を検索 ===")
+    
+    # 全在庫データから同じ製品分類を検索
+    all_inventories = load_all_inventories()
+    
+    related_parts = []
+    for inventory in all_inventories:
+        if inventory.get('category', '') == category:
+            quantity = float(inventory.get('quantity', 0) or 0)
+            
+            # 警告判定: 不足数より在庫が少ない
+            warning = quantity < shortage if shortage > 0 else False
+            
+            # 品番を取得
+            optional_attrs = inventory.get('optional_attributes', [])
+            hinban_value = ''
+            for attr in optional_attrs:
+                if attr.get('name') == '品番':
+                    hinban_value = attr.get('value', '')
+                    break
+            
+            related_parts.append({
+                'hinban': hinban_value,
+                'name': inventory.get('title', ''),
+                'quantity': quantity,
+                'unit': inventory.get('unit', '個'),
+                'zaico_code': inventory.get('code', ''),
+                'updated_at': inventory.get('updated_at', ''),
+                'warning': warning
+            })
+    
+    print(f"  ✓ {len(related_parts)} 件の関連部品を発見")
+    
+    return jsonify({
+        'category': category,
+        'shortage': shortage,
+        'parts': related_parts
+    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
