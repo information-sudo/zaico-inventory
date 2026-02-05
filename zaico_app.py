@@ -12,7 +12,7 @@ ZAICO_API_TOKEN = "jrmXaweTqNZdPN9HCiSF7VGskW2NBCPY"
 ZAICO_API_BASE_URL = "https://web.zaico.co.jp/api/v1"
 
 def extract_items_from_pdf(pdf_file):
-    """PDFから品番と数量を抽出（受注票・受注残リスト両対応）"""
+    """受注票PDFから品番と数量を抽出"""
     items = []
     
     pdf_reader = PyPDF2.PdfReader(pdf_file)
@@ -23,7 +23,6 @@ def extract_items_from_pdf(pdf_file):
     lines = text.split('\n')
     hinban_list = []
     
-    # パターン1: 受注票（購入品）
     for i, line in enumerate(lines):
         hinban_match = re.search(r'購入品\s+(\d{4}-\d{2}-[A-Z0-9\-]+?)(\d{3})\s*$', line)
         if hinban_match:
@@ -35,25 +34,6 @@ def extract_items_from_pdf(pdf_file):
                 if qty_match:
                     quantity = int(qty_match.group(1))
             hinban_list.append({'hinban': hinban, 'quantity': quantity})
-    
-    # パターン2: 受注残リスト（4桁-2桁-...形式）
-    if not hinban_list:
-        for i, line in enumerate(lines):
-            hinban_match = re.search(r'(\d{4}-\d{2}-[A-Z0-9\-]+)', line)
-            if hinban_match:
-                hinban = hinban_match.group(1)
-                quantity = 1
-                # 同じ行の末尾に数字
-                qty_match = re.search(r'\s(\d+)\s*$', line)
-                if qty_match:
-                    quantity = int(qty_match.group(1))
-                # 次の行に数字
-                elif i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    qty_match2 = re.match(r'^(\d+)', next_line)
-                    if qty_match2:
-                        quantity = int(qty_match2.group(1))
-                hinban_list.append({'hinban': hinban, 'quantity': quantity})
     
     # 重複を除去
     seen = set()
@@ -101,22 +81,25 @@ def search_zaico_inventory(hinban):
     }
     
     try:
-        total_pages = get_total_pages()
+        total_pages = min(get_total_pages(), 20)  # 最大20ページに制限
         
         for page in range(1, total_pages + 1):
+            print(f"ページ {page}/{total_pages} を検索中...")
             response = requests.get(
                 f"{ZAICO_API_BASE_URL}/inventories",
                 headers=headers,
                 params={"page": page, "per_page": 100},
-                timeout=10
+                timeout=15
             )
             
             if response.status_code != 200:
+                print(f"ページ {page} 取得失敗: {response.status_code}")
                 continue
             
             data = response.json()
             
             if not data:
+                print(f"ページ {page} にデータなし。検索終了")
                 break
             
             # 各データを検索
@@ -132,6 +115,7 @@ def search_zaico_inventory(hinban):
                 
                 # 品番が一致するかチェック
                 if hinban_value == hinban:
+                    print(f"✓ 品番 {hinban} を発見（ページ {page}）")
                     return {
                         'success': True,
                         'hinban': hinban_value,
@@ -144,6 +128,7 @@ def search_zaico_inventory(hinban):
                         'updated_at': inventory.get('updated_at', '')
                     }
         
+        print(f"✗ 品番 {hinban} は {total_pages} ページ内に見つかりませんでした")
         return {
             'success': False,
             'error': '品番が見つかりませんでした'
