@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zaico在庫確認システム</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .upload-section {
+            background: #f8f9fa;
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 30px;
+            transition: all 0.3s;
+        }
+
+        .upload-section:hover {
+            border-color: #764ba2;
+            background: #f0f1ff;
+        }
+
+        .upload-section.dragging {
+            background: #e8eaff;
+            border-color: #764ba2;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .upload-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .upload-btn:hover {
+            transform: scale(1.05);
+        }
+
+        .file-name {
+            margin-top: 20px;
+            font-size: 1.1em;
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .check-btn {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 15px 50px;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: block;
+            margin: 20px auto;
+        }
+
+        .check-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 30px rgba(245, 87, 108, 0.4);
+        }
+
+        .check-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+        }
+
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #667eea;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .results {
+            display: none;
+            margin-top: 30px;
+        }
+
+        .results-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+        }
+
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 0;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .results-table th,
+        .results-table td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .results-table th {
+            background: #f8f9fa;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .results-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .status-ok {
+            color: #28a745;
+            font-weight: bold;
+        }
+
+        .status-ng {
+            color: #dc3545;
+            font-weight: bold;
+        }
+
+        .status-error {
+            color: #ffc107;
+            font-weight: bold;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+
+        .badge-ok {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge-ng {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .badge-error {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .summary {
+            display: flex;
+            justify-content: space-around;
+            margin: 30px 0;
+            gap: 20px;
+        }
+
+        .summary-card {
+            flex: 1;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .summary-card h3 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .summary-ok {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .summary-ng {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .summary-total {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .manual-item {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .manual-item-info {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .remove-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+
+        .remove-btn:hover {
+            background: #c82333;
+        }
+
+        .print-btn {
+            background: #28a745;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 1em;
+            margin: 20px auto;
+            display: block;
+        }
+
+        .print-btn:hover {
+            background: #218838;
+        }
+
+        .related-btn {
+            background: #17a2b8;
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.9em;
+            white-space: nowrap;
+        }
+
+        .related-btn:hover {
+            background: #138496;
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+            .header, .upload-section, .manual-input, .check-btn, .loading, .error-message, .print-btn, .clear-btn {
+                display: none !important;
+            }
+            .container {
+                box-shadow: none;
+                border-radius: 0;
+            }
+            .results {
+                display: block !important;
+            }
+            .summary-card {
+                break-inside: avoid;
+            }
+            table {
+                page-break-inside: auto;
+            }
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📦 Zaico在庫確認システム</h1>
+            <p>受注伝票PDFをアップロードして在庫状況を確認</p>
+        </div>
+
+        <div class="content">
+            <div class="upload-section" id="uploadSection">
+                <h2 style="margin-bottom: 20px;">📄 受注伝票PDFをアップロード</h2>
+                <div class="file-input-wrapper">
+                    <button class="upload-btn">ファイルを選択</button>
+                    <input type="file" id="pdfFile" accept=".pdf">
+                </div>
+                <div class="file-name" id="fileName"></div>
+                <button class="clear-btn" id="clearBtn" style="display: none; margin-top: 15px; background: #dc3545; color: white; padding: 10px 30px; border: none; border-radius: 50px; cursor: pointer; font-size: 1em;">🗑️ クリア</button>
+            </div>
+
+            <div class="manual-input" style="background: #f8f9fa; border-radius: 15px; padding: 30px; margin-bottom: 30px;">
+                <h2 style="margin-bottom: 20px; color: #667eea;">✏️ 手動入力</h2>
+                <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 200px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold; color: #333;">品番</label>
+                        <input type="text" id="manualHinban" placeholder="例: 1616-01-P010A" style="width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                    </div>
+                    <div style="flex: 0 0 150px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold; color: #333;">受注数量</label>
+                        <input type="number" id="manualQuantity" value="1" min="1" style="width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                    </div>
+                    <button id="addManualBtn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 30px; border: none; border-radius: 50px; cursor: pointer; font-size: 1em; white-space: nowrap;">➕ 追加</button>
+                </div>
+                <div id="manualItemsList" style="margin-top: 20px;"></div>
+            </div>
+
+            <button class="check-btn" id="checkBtn" disabled>在庫を確認する</button>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>在庫確認中...</p>
+            </div>
+
+            <div class="error-message" id="errorMessage"></div>
+
+            <div class="results" id="results">
+                <button class="print-btn" onclick="window.print()">🖨️ 印刷する</button>
+                <div class="summary" id="summary"></div>
+                <div class="results-header">
+                    <h2>在庫確認結果</h2>
+                </div>
+                <table class="results-table">
+                    <thead>
+                        <tr>
+                            <th>品番</th>
+                            <th>品名</th>
+                            <th>必要数</th>
+                            <th>在庫数</th>
+                            <th>単位</th>
+                            <th>不足数</th>
+                            <th>更新日</th>
+                            <th>状態</th>
+                            <th>アクション</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const pdfFile = document.getElementById('pdfFile');
+        const fileName = document.getElementById('fileName');
+        const checkBtn = document.getElementById('checkBtn');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+        const resultsBody = document.getElementById('resultsBody');
+        const errorMessage = document.getElementById('errorMessage');
+        const uploadSection = document.getElementById('uploadSection');
+        const summary = document.getElementById('summary');
+
+        let selectedFile = null;
+        let manualItems = [];
+
+        // ファイル選択
+        pdfFile.addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                selectedFile = e.target.files[0];
+                fileName.textContent = `選択されたファイル: ${selectedFile.name}`;
+                document.getElementById('clearBtn').style.display = 'inline-block';
+                updateCheckButton();
+            }
+        });
+
+        // クリアボタン
+        document.getElementById('clearBtn').addEventListener('click', function() {
+            selectedFile = null;
+            pdfFile.value = '';
+            fileName.textContent = '';
+            document.getElementById('clearBtn').style.display = 'none';
+            results.style.display = 'none';
+            errorMessage.style.display = 'none';
+            summary.innerHTML = '';
+            resultsBody.innerHTML = '';
+            updateCheckButton();
+        });
+
+        // ドラッグ&ドロップ
+        uploadSection.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadSection.classList.add('dragging');
+        });
+
+        uploadSection.addEventListener('dragleave', function(e) {
+            uploadSection.classList.remove('dragging');
+        });
+
+        uploadSection.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadSection.classList.remove('dragging');
+            
+            if (e.dataTransfer.files.length > 0) {
+                selectedFile = e.dataTransfer.files[0];
+                if (selectedFile.name.endsWith('.pdf')) {
+                    fileName.textContent = `選択されたファイル: ${selectedFile.name}`;
+                    document.getElementById('clearBtn').style.display = 'inline-block';
+                    updateCheckButton();
+                } else {
+                    alert('PDFファイルを選択してください');
+                }
+            }
+        });
+
+        // 手動入力 - 追加ボタン
+        document.getElementById('addManualBtn').addEventListener('click', function() {
+            const hinban = document.getElementById('manualHinban').value.trim();
+            const quantity = parseInt(document.getElementById('manualQuantity').value);
+            
+            if (!hinban) {
+                alert('品番を入力してください');
+                return;
+            }
+            
+            if (quantity < 1) {
+                alert('数量は1以上を入力してください');
+                return;
+            }
+            
+            // 重複チェック
+            if (manualItems.some(item => item.hinban === hinban)) {
+                alert('この品番は既に追加されています');
+                return;
+            }
+            
+            manualItems.push({ hinban, quantity });
+            document.getElementById('manualHinban').value = '';
+            document.getElementById('manualQuantity').value = '1';
+            renderManualItems();
+            updateCheckButton();
+        });
+
+        // Enterキーで追加
+        document.getElementById('manualHinban').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                document.getElementById('addManualBtn').click();
+            }
+        });
+
+        document.getElementById('manualQuantity').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                document.getElementById('addManualBtn').click();
+            }
+        });
+
+        // 手動入力リストを表示
+        function renderManualItems() {
+            const container = document.getElementById('manualItemsList');
+            
+            if (manualItems.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+            
+            container.innerHTML = '<h3 style="margin-bottom: 15px; color: #333;">追加された品番</h3>';
+            
+            manualItems.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'manual-item';
+                div.innerHTML = `
+                    <div class="manual-item-info">
+                        <strong style="color: #667eea; font-size: 1.1em;">${item.hinban}</strong>
+                        <span style="color: #666;">数量: <strong>${item.quantity}</strong></span>
+                    </div>
+                    <button class="remove-btn" onclick="removeManualItem(${index})">削除</button>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // 手動入力アイテム削除
+        window.removeManualItem = function(index) {
+            manualItems.splice(index, 1);
+            renderManualItems();
+            updateCheckButton();
+        };
+
+        // 在庫確認ボタンの状態更新
+        function updateCheckButton() {
+            checkBtn.disabled = !selectedFile && manualItems.length === 0;
+        }
+
+        // 在庫確認
+        checkBtn.addEventListener('click', async function() {
+            if (!selectedFile && manualItems.length === 0) return;
+
+            // UI更新
+            loading.style.display = 'block';
+            results.style.display = 'none';
+            errorMessage.style.display = 'none';
+            checkBtn.disabled = true;
+
+            try {
+                let data;
+                
+                // PDFアップロードの場合
+                if (selectedFile) {
+                    const formData = new FormData();
+                    formData.append('pdf_file', selectedFile);
+
+                    const response = await fetch('/check_inventory', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    data = await response.json();
+                    
+                    if (!response.ok) {
+                        loading.style.display = 'none';
+                        showError(data.error || '在庫確認中にエラーが発生しました');
+                        checkBtn.disabled = false;
+                        return;
+                    }
+                }
+                // 手動入力の場合
+                else if (manualItems.length > 0) {
+                    const response = await fetch('/check_manual_inventory', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ items: manualItems })
+                    });
+                    
+                    data = await response.json();
+                    
+                    if (!response.ok) {
+                        loading.style.display = 'none';
+                        showError(data.error || '在庫確認中にエラーが発生しました');
+                        checkBtn.disabled = false;
+                        return;
+                    }
+                }
+
+                loading.style.display = 'none';
+                displayResults(data.results);
+            } catch (error) {
+                loading.style.display = 'none';
+                showError('通信エラーが発生しました: ' + error.message);
+            }
+
+            checkBtn.disabled = false;
+        });
+
+        function displayResults(items) {
+            resultsBody.innerHTML = '';
+            
+            let okCount = 0;
+            let ngCount = 0;
+            
+            items.forEach(item => {
+                const row = document.createElement('tr');
+                
+                let statusClass = '';
+                let badgeClass = '';
+                let statusText = '';
+                
+                if (item.status === 'OK') {
+                    statusClass = 'status-ok';
+                    badgeClass = 'badge-ok';
+                    statusText = '✓ 在庫あり';
+                    okCount++;
+                } else if (item.status === 'NG') {
+                    statusClass = 'status-ng';
+                    badgeClass = 'badge-ng';
+                    statusText = '✗ 在庫不足';
+                    ngCount++;
+                } else if (item.status === 'NOT_FOUND') {
+                    statusClass = 'status-error';
+                    badgeClass = 'badge-error';
+                    statusText = '📝 登録なし';
+                } else {
+                    statusClass = 'status-error';
+                    badgeClass = 'badge-error';
+                    statusText = '⚠ エラー';
+                }
+                
+                // 更新日をフォーマット
+                let updatedDate = '-';
+                if (item.updated_at) {
+                    const date = new Date(item.updated_at);
+                    if (!isNaN(date.getTime())) {
+                        const y = date.getFullYear();
+                        const m = String(date.getMonth() + 1).padStart(2, '0');
+                        const d = String(date.getDate()).padStart(2, '0');
+                        const h = String(date.getHours()).padStart(2, '0');
+                        const min = String(date.getMinutes()).padStart(2, '0');
+                        updatedDate = `${y}/${m}/${d} ${h}:${min}`;
+                    }
+                }
+                
+                // アクションボタン
+                let actionBtn = '';
+                if (item.status === 'NG' && item.category) {
+                    const safeName = (item.name || '').replace(/'/g, "\\'");
+                    actionBtn = `<button class="related-btn" onclick="showRelatedParts('${item.category}', ${item.shortage}, '${safeName}')">🔍 関連部品</button>`;
+                }
+                
+                row.innerHTML = `
+                    <td><strong>${item.hinban}</strong></td>
+                    <td>${item.name}</td>
+                    <td>${Number(item.required_qty) || 0}</td>
+                    <td class="${statusClass}">${Number(item.current_qty) || 0}</td>
+                    <td>${item.unit}</td>
+                    <td class="${item.shortage > 0 ? 'status-ng' : ''}">${Number(item.shortage) || 0}</td>
+                    <td style="font-size: 0.9em; color: #666;">${updatedDate}</td>
+                    <td><span class="badge ${badgeClass}">${statusText}</span></td>
+                    <td>${actionBtn}</td>
+                `;
+                
+                resultsBody.appendChild(row);
+            });
+            
+            // サマリー表示
+            summary.innerHTML = `
+                <div class="summary-card summary-total">
+                    <h3>${items.length}</h3>
+                    <p>総品番数</p>
+                </div>
+                <div class="summary-card summary-ok">
+                    <h3>${okCount}</h3>
+                    <p>在庫OK</p>
+                </div>
+                <div class="summary-card summary-ng">
+                    <h3>${ngCount}</h3>
+                    <p>在庫不足</p>
+                </div>
+            `;
+            
+            results.style.display = 'block';
+        }
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+        }
+
+        // 関連部品表示
+        async function showRelatedParts(category, shortage, productName) {
+            try {
+                const response = await fetch('/get_related_parts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        category, 
+                        shortage,
+                        product_name: productName 
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    alert('エラー: ' + (data.error || '関連部品の取得に失敗しました'));
+                    return;
+                }
+                
+                displayRelatedParts(data);
+            } catch (error) {
+                alert('通信エラー: ' + error.message);
+            }
+        }
+
+        function displayRelatedParts(data) {
+            const sizesText = data.target_sizes && data.target_sizes.length > 0 
+                ? `サイズフィルタ: ${data.target_sizes.join(', ')}mm` 
+                : 'サイズフィルタなし';
+            
+            let html = `
+                <div style="background: white; padding: 20px; border-radius: 10px; margin-top: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+                    <h3 style="color: #667eea; margin-bottom: 10px;">🔍 製品分類: ${data.category} の関連部品・製品 (${data.parts.length}件)</h3>
+                    <p style="margin-bottom: 5px; color: #666; font-size: 0.95em;">不足製品: <strong>${data.product_name || '-'}</strong></p>
+                    <p style="margin-bottom: 5px; color: #666;">不足数: <strong style="color: #dc3545;">${data.shortage}</strong> → <span style="color: #856404;">⚠️ この数より少ない部品は警告表示</span></p>
+                    <p style="margin-bottom: 20px; color: #17a2b8; font-weight: bold; font-size: 0.9em;">🔍 ${sizesText}</p>
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>品番</th>
+                                <th>品名</th>
+                                <th>在庫数</th>
+                                <th>単位</th>
+                                <th>更新日</th>
+                                <th>状態</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            data.parts.forEach(part => {
+                const updatedDate = part.updated_at ? new Date(part.updated_at).toLocaleString('ja-JP') : '-';
+                const warningBadge = part.warning ? '<span class="badge badge-error">⚠️ 警告</span>' : '';
+                const qtyClass = part.warning ? 'status-ng' : (part.quantity > 0 ? 'status-ok' : '');
+                
+                html += `
+                    <tr>
+                        <td><strong>${part.hinban || '-'}</strong></td>
+                        <td>${part.name}</td>
+                        <td class="${qtyClass}">${part.quantity}</td>
+                        <td>${part.unit}</td>
+                        <td style="font-size: 0.9em; color: #666;">${updatedDate}</td>
+                        <td>${warningBadge}</td>
+                    </tr>
+                `;
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                    <button onclick="this.parentElement.remove()" style="margin-top: 15px; background: #6c757d; color: white; padding: 10px 30px; border: none; border-radius: 50px; cursor: pointer;">閉じる</button>
+                </div>
+            `;
+            
+            // 結果テーブルの後に挿入
+            const resultsDiv = document.getElementById('results');
+            const relatedDiv = document.createElement('div');
+            relatedDiv.innerHTML = html;
+            resultsDiv.appendChild(relatedDiv);
+        }
+    </script>
+</body>
+</html>
