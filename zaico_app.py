@@ -1,415 +1,422 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Zaico 在庫確認アプリ - 完全版
+バージョン: v3.0 FINAL
+更新日: 2026-02-05
+
+機能:
+- PDFアップロード: 受注票から品番と数量を自動抽出
+- 手動入力: 品番と数量を手動で追加
+- 在庫確認: Zaico APIで在庫を確認
+- 関連部品検索: サイズ表記なし部品(共通部品)も含めて検索
+"""
+
+from flask import Flask, request, jsonify, render_template
 import os
-from flask import Flask, render_template, request, jsonify
 import requests
-import PyPDF2
 import re
-from io import BytesIO
-from datetime import datetime, timedelta
+import pdfplumber
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
 # Zaico API設定
-ZAICO_API_TOKEN = "jrmXaweTqNZdPN9HCiSF7VGskW2NBCPY"
-ZAICO_API_BASE_URL = "https://web.zaico.co.jp/api/v1"
+ZAICO_API_URL = 'https://web.zaico.co.jp/api/v1/inventories'
+ZAICO_TOKEN = os.environ.get('ZAICO_TOKEN', None)
 
-# キャッシュ設定
-inventory_cache = {
-    'data': [],
-    'timestamp': None,
-    'ttl': 300  # 5分間有効
+# サイズパターン
+SIZE_PATTERNS = [
+    r'(\d+)\s*mm',
+    r'(\d+)MM',
+    r'φ\s*(\d+)',
+    r'(\d+)\s*A',
+    r'\(\s*(\d+)/(\d+)\s*\)',
+    r'1/2', r'3/8', r'5/8', r'3/4',
+]
+
+INCH_TO_MM = {
+    '1/2': 13,
+    '3/8': 10,
+    '5/8': 16,
+    '3/4': 20,
+    '1': 25
 }
 
-def extract_items_from_pdf(pdf_file):
-    """受注票PDFから品番と数量を抽出"""
-    items = []
-    
-    pdf_reader = PyPDF2.PdfReader(pdf_file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text()
-    
-    lines = text.split('\n')
-    hinban_list = []
-    
-    for i, line in enumerate(lines):
-        # 「購入品」を含む行から品番を抽出
-        if '購入品' in line:
-            # 「購入品」より後ろの部分を取得
-            after_kounyuuhin = line.split('購入品', 1)[1].strip()
-            # 品番パターン: xxxx-xx-xx または xxxx-xx-xxx + 明細番号3桁
-            pattern = r'(\d{4}-\d{2}-\d{2,3}?)(\d{3})$'
-            matches = re.findall(pattern, after_kounyuuhin)
-            
-            if matches:
-                # 最後のマッチから品番を取得（図面番号がある場合は後ろの方）
-                hinban, meisai_no = matches[-1]
-                quantity = 1
-                if i >= 1:
-                    prev_line = lines[i - 1].strip()
-                    qty_match = re.match(r'^(\d+)\s+', prev_line)
-                    if qty_match:
-                        quantity = int(qty_match.group(1))
-                hinban_list.append({'hinban': hinban, 'quantity': quantity})
-    
-    # 重複を除去
-    seen = set()
-    unique_items = []
-    for item in hinban_list:
-        key = item['hinban']
-        if key not in seen:
-            seen.add(key)
-            unique_items.append(item)
-    
-    return unique_items
+# ===========================
+# ヘルパー関数
+# ===========================
 
-def get_total_pages():
-    """Link Headerから総ページ数を取得"""
-    headers = {
-        "Authorization": f"Bearer {ZAICO_API_TOKEN}",
-        "Content-Type": "application/json"
-    }
+def get_item_code(item):
+    """optional_attributes から品番を取得"""
+    for attr in item.get('optional_attributes', []):
+        if attr.get('name') == '品番':
+            return attr.get('value')
+    return None
+
+def extract_sizes_from_name(item_name):
+    """品名からサイズを抽出 (mm単位)"""
+    sizes = set()
+    
+    for pattern in SIZE_PATTERNS:
+        matches = re.findall(pattern, item_name)
+        for match in matches:
+            if isinstance(match, tuple):
+                fraction = f'{match[0]}/{match[1]}'
+                if fraction in INCH_TO_MM:
+                    sizes.add(INCH_TO_MM[fraction])
+            elif match in INCH_TO_MM:
+                sizes.add(INCH_TO_MM[match])
+            elif match.isdigit():
+                sizes.add(int(match))
+    
+    return sorted(sizes)
+
+def has_size_notation(item_name):
+    """サイズ表記があるかチェック"""
+    for pattern in SIZE_PATTERNS:
+        if re.search(pattern, item_name):
+            return True
+    return False
+
+def get_category_from_code(item_code):
+    """品番から分類コードを取得 (最初の4桁)"""
+    if not item_code:
+        return None
+    match = re.match(r'^(\d{4})', item_code)
+    return match.group(1) if match else None
+
+def get_all_inventory_data():
+    """Zaico APIで全在庫データを取得 (ページネーション対応)"""
+    if not ZAICO_TOKEN:
+        return [], 'トークンが設定されていません'
+    
+    all_inventory = []
+    page = 1
+    per_page = 1000
     
     try:
-        response = requests.get(
-            f"{ZAICO_API_BASE_URL}/inventories",
-            headers=headers,
-            params={"page": 1, "per_page": 100},
-            timeout=10
-        )
+        headers = {
+            'Authorization': f'Bearer {ZAICO_TOKEN}',
+            'Content-Type': 'application/json'
+        }
         
-        if response.status_code == 200:
-            link_header = response.headers.get('Link', '')
-            match = re.search(r'page=(\d+)&per_page=\d+>; rel="last"', link_header)
-            if match:
-                return int(match.group(1))
-        
-        return 10
-    except Exception as e:
-        print(f"総ページ数取得エラー: {e}")
-        return 10
-
-def load_all_inventories():
-    """全在庫データを一括取得してキャッシュ"""
-    global inventory_cache
-    
-    # キャッシュが有効かチェック
-    if inventory_cache['timestamp']:
-        elapsed = datetime.now() - inventory_cache['timestamp']
-        if elapsed.total_seconds() < inventory_cache['ttl']:
-            print(f"✓ キャッシュを使用（残り有効時間: {int(inventory_cache['ttl'] - elapsed.total_seconds())}秒）")
-            return inventory_cache['data']
-    
-    print("📦 全在庫データを取得中...")
-    
-    headers = {
-        "Authorization": f"Bearer {ZAICO_API_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    all_inventories = []
-    
-    try:
-        total_pages = min(get_total_pages(), 20)  # 最大20ページ
-        print(f"📄 全 {total_pages} ページを取得します...")
-        
-        for page in range(1, total_pages + 1):
-            print(f"  ページ {page}/{total_pages} 取得中...", end=' ')
-            
+        while True:
             response = requests.get(
-                f"{ZAICO_API_BASE_URL}/inventories",
+                ZAICO_API_URL,
                 headers=headers,
-                params={"page": page, "per_page": 100},
-                timeout=15
+                params={'per_page': per_page, 'page': page}
             )
-            
-            if response.status_code != 200:
-                print(f"❌ 失敗 (status: {response.status_code})")
-                continue
+            response.raise_for_status()
             
             data = response.json()
             
-            if not data:
-                print("⚠ データなし")
+            # レスポンスが list か dict かを判定
+            if isinstance(data, list):
+                items = data
+            else:
+                items = data.get('inventories', [])
+            
+            if not items:
                 break
             
-            all_inventories.extend(data)
-            print(f"✓ {len(data)}件")
-        
-        # キャッシュを更新
-        inventory_cache['data'] = all_inventories
-        inventory_cache['timestamp'] = datetime.now()
-        
-        print(f"✅ 合計 {len(all_inventories)} 件の在庫データを取得しました")
-        
-        return all_inventories
-        
-    except Exception as e:
-        print(f"❌ エラー: {e}")
-        return []
-
-def search_zaico_inventory(hinban):
-    """キャッシュから品番を検索"""
-    print(f"🔍 品番 {hinban} を検索中...")
-    
-    # 全在庫データを取得（キャッシュから）
-    all_inventories = load_all_inventories()
-    
-    if not all_inventories:
-        return {
-            'success': False,
-            'error': '在庫データの取得に失敗しました'
-        }
-    
-    # キャッシュから検索
-    for inventory in all_inventories:
-        optional_attrs = inventory.get('optional_attributes', [])
-        hinban_value = ''
-        
-        for attr in optional_attrs:
-            if attr.get('name') == '品番':
-                hinban_value = attr.get('value', '')
+            all_inventory.extend(items)
+            
+            if len(items) < per_page:
                 break
+            
+            page += 1
         
-        if hinban_value == hinban:
-            print(f"  ✓ 品番 {hinban} を発見")
-            return {
-                'success': True,
-                'hinban': hinban_value,
-                'name': inventory.get('title', ''),
-                'quantity': float(inventory.get('quantity', 0) or 0),
-                'unit': inventory.get('unit', '個'),
-                'zaico_code': inventory.get('code', ''),
-                'zaico_id': inventory.get('id', ''),
-                'category': inventory.get('category', ''),
-                'updated_at': inventory.get('updated_at', '')
-            }
+        return all_inventory, None
+        
+    except requests.exceptions.RequestException as e:
+        return [], str(e)
+
+def extract_hinban_from_pdf(pdf_file):
+    """
+    PDFから品番と数量を抽出
+    pdfplumberの表データから抽出
+    """
+    items = []
     
-    print(f"  ✗ 品番 {hinban} が見つかりませんでした")
-    return {
-        'success': False,
-        'error': '品番が見つかりませんでした'
-    }
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                
+                for table in tables:
+                    current_hinban = None
+                    
+                    for row in table:
+                        # 品番を検出
+                        for cell in row:
+                            if cell and '品番/図番' in str(cell):
+                                hinban_match = re.search(r'(\d{4}-\d{2}-\d{2,3})', str(cell))
+                                if hinban_match:
+                                    current_hinban = hinban_match.group(1)
+                        
+                        # 数量を検出 (品番の次の行で探す)
+                        if current_hinban:
+                            for cell in row:
+                                if cell and '数量' in str(cell):
+                                    quantity_match = re.search(r'数量\s*\n?\s*(\d+)', str(cell))
+                                    if quantity_match:
+                                        quantity = int(quantity_match.group(1))
+                                        items.append({
+                                            'hinban': current_hinban,
+                                            'quantity': quantity
+                                        })
+                                        current_hinban = None
+                                        break
+    except Exception as e:
+        print(f"PDF抽出エラー: {e}")
+    
+    return items
+
+# ===========================
+# ルート
+# ===========================
 
 @app.route('/')
 def index():
+    """メインページ"""
     return render_template('index.html')
 
-@app.route('/test')
-def test():
-    return render_template('test.html')
-
-@app.route('/check_hinban', methods=['POST'])
-def check_hinban():
+@app.route('/set_token', methods=['POST'])
+def set_token():
+    """トークンを設定"""
+    global ZAICO_TOKEN
     data = request.get_json()
-    hinban = data.get('hinban', '').strip()
-    
-    if not hinban:
-        return jsonify({'success': False, 'error': '品番を入力してください'}), 400
-    
-    print(f"\n=== 品番検索: {hinban} ===")
-    result = search_zaico_inventory(hinban)
-    
-    if result['success']:
-        return jsonify(result)
-    else:
-        return jsonify(result), 404
+    ZAICO_TOKEN = data.get('token')
+    return jsonify({'status': 'success'})
 
 @app.route('/check_inventory', methods=['POST'])
 def check_inventory():
+    """PDFアップロードで在庫確認"""
     if 'pdf_file' not in request.files:
-        return jsonify({'error': 'PDFファイルがアップロードされていません'}), 400
+        return jsonify({'error': 'PDFファイルがありません'}), 400
     
     pdf_file = request.files['pdf_file']
     
     if pdf_file.filename == '':
         return jsonify({'error': 'ファイルが選択されていません'}), 400
     
-    if not pdf_file.filename.endswith('.pdf'):
-        return jsonify({'error': 'PDFファイルをアップロードしてください'}), 400
-    
-    try:
-        # PDFから品番と数量を抽出
-        items = extract_items_from_pdf(BytesIO(pdf_file.read()))
-        
-        if not items:
-            return jsonify({'error': 'PDFから品番を抽出できませんでした'}), 400
-        
-        print(f"\n=== 受注伝票から{len(items)}件の品番を抽出 ===")
-        for item in items:
-            print(f"  品番: {item['hinban']}, 数量: {item['quantity']}")
-        
-        results = check_items_inventory(items)
-        
-        print(f"=== 在庫確認完了 ===\n")
-        return jsonify({'results': results})
-    
-    except Exception as e:
-        return jsonify({'error': f'処理中にエラーが発生しました: {str(e)}'}), 500
-
-@app.route('/check_manual_inventory', methods=['POST'])
-def check_manual_inventory():
-    data = request.get_json()
-    items = data.get('items', [])
+    # PDFから品番と数量を抽出
+    items = extract_hinban_from_pdf(pdf_file)
     
     if not items:
-        return jsonify({'error': '品番が入力されていません'}), 400
+        return jsonify({'error': 'PDFから品番を抽出できませんでした'}), 400
     
-    try:
-        print(f"\n=== 手動入力から{len(items)}件の品番を確認 ===")
-        results = check_items_inventory(items)
-        
-        print(f"=== 在庫確認完了 ===\n")
-        return jsonify({'results': results})
+    # 在庫データを取得
+    all_inventory, error = get_all_inventory_data()
     
-    except Exception as e:
-        return jsonify({'error': f'処理中にエラーが発生しました: {str(e)}'}), 500
-
-def check_items_inventory(items):
-    """品番リストの在庫を確認"""
+    if error:
+        return jsonify({'error': error}), 500
+    
+    # 在庫確認
     results = []
     for item in items:
         hinban = item['hinban']
         required_qty = item['quantity']
         
-        print(f"品番 {hinban} （必要数: {required_qty}）")
-        inventory_info = search_zaico_inventory(hinban)
+        # 品番で検索
+        stock_item = None
+        for inv_item in all_inventory:
+            item_code = get_item_code(inv_item)
+            if item_code == hinban:
+                stock_item = inv_item
+                break
         
-        if inventory_info['success']:
-            current_qty = inventory_info['quantity']
-            status = 'OK' if current_qty >= required_qty else 'NG'
+        if stock_item:
+            stock_qty = float(stock_item.get('quantity', 0))
+            shortage = max(0, required_qty - stock_qty)
             
             results.append({
                 'hinban': hinban,
-                'name': inventory_info['name'],
-                'required_qty': required_qty,
-                'current_qty': current_qty,
-                'unit': inventory_info['unit'],
-                'status': status,
-                'shortage': max(0, required_qty - current_qty),
-                'zaico_code': inventory_info.get('zaico_code', ''),
-                'zaico_id': inventory_info.get('zaico_id', ''),
-                'updated_at': inventory_info.get('updated_at', ''),
-                'category': inventory_info.get('category', '')
+                'title': stock_item.get('title', ''),
+                'required': required_qty,
+                'stock': stock_qty,
+                'unit': stock_item.get('unit', ''),
+                'shortage': shortage,
+                'updated_at': stock_item.get('updated_at', ''),
+                'status': 'OK' if shortage == 0 else 'NG',
+                'category': get_category_from_code(hinban)
             })
         else:
             results.append({
                 'hinban': hinban,
-                'name': 'Zaico未登録',
-                'required_qty': required_qty,
-                'current_qty': 0,
-                'unit': '-',
-                'status': 'NOT_FOUND',
+                'title': '',
+                'required': required_qty,
+                'stock': 0,
+                'unit': '',
                 'shortage': required_qty,
-                'zaico_code': '',
-                'zaico_id': '',
-                'updated_at': ''
+                'updated_at': '',
+                'status': 'NOT_FOUND',
+                'category': None
             })
     
-    return results
+    return jsonify({'results': results})
+
+@app.route('/check_manual_inventory', methods=['POST'])
+def check_manual_inventory():
+    """手動入力で在庫確認"""
+    data = request.get_json()
+    items = data.get('items', [])
+    
+    if not items:
+        return jsonify({'error': '品番がありません'}), 400
+    
+    # 在庫データを取得
+    all_inventory, error = get_all_inventory_data()
+    
+    if error:
+        return jsonify({'error': error}), 500
+    
+    # 在庫確認
+    results = []
+    for item in items:
+        hinban = item['hinban']
+        required_qty = item['quantity']
+        
+        # 品番で検索
+        stock_item = None
+        for inv_item in all_inventory:
+            item_code = get_item_code(inv_item)
+            if item_code == hinban:
+                stock_item = inv_item
+                break
+        
+        if stock_item:
+            stock_qty = float(stock_item.get('quantity', 0))
+            shortage = max(0, required_qty - stock_qty)
+            
+            results.append({
+                'hinban': hinban,
+                'title': stock_item.get('title', ''),
+                'required': required_qty,
+                'stock': stock_qty,
+                'unit': stock_item.get('unit', ''),
+                'shortage': shortage,
+                'updated_at': stock_item.get('updated_at', ''),
+                'status': 'OK' if shortage == 0 else 'NG',
+                'category': get_category_from_code(hinban)
+            })
+        else:
+            results.append({
+                'hinban': hinban,
+                'title': '',
+                'required': required_qty,
+                'stock': 0,
+                'unit': '',
+                'shortage': required_qty,
+                'updated_at': '',
+                'status': 'NOT_FOUND',
+                'category': None
+            })
+    
+    return jsonify({'results': results})
 
 @app.route('/get_related_parts', methods=['POST'])
 def get_related_parts():
-    """製品分類が同じ部品・製品を取得（サイズフィルタリング付き）"""
+    """関連部品を検索 (サイズ表記なし部品も含む)"""
     data = request.get_json()
-    category = data.get('category', '').strip()
-    shortage = data.get('shortage', 0)
-    product_name = data.get('product_name', '').strip()
+    product_code = data.get('product_code')
+    
+    if not product_code:
+        return jsonify({'error': '品番がありません'}), 400
+    
+    category = get_category_from_code(product_code)
     
     if not category:
-        return jsonify({'error': '製品分類が指定されていません'}), 400
+        return jsonify({'error': '分類コードを取得できません'}), 400
     
-    print(f"\n=== 製品分類 {category} の関連部品を検索 ===")
-    print(f"  不足製品: {product_name}")
+    # 在庫データを取得
+    all_inventory, error = get_all_inventory_data()
     
-    # 不足品からサイズを抽出
-    target_sizes = extract_sizes(product_name)
-    print(f"  抽出されたサイズ: {target_sizes}")
+    if error:
+        return jsonify({'error': error}), 500
     
-    # 全在庫データから同じ製品分類を検索
-    all_inventories = load_all_inventories()
+    # 製品情報
+    product_item = None
+    for item in all_inventory:
+        item_code = get_item_code(item)
+        if item_code == product_code:
+            product_item = item
+            break
     
+    if not product_item:
+        return jsonify({'error': '製品が見つかりません'}), 404
+    
+    product_name = product_item.get('title', '')
+    product_sizes = extract_sizes_from_name(product_name)
+    
+    # 関連部品を検索
     related_parts = []
-    for inventory in all_inventories:
-        if inventory.get('category', '') == category:
-            inventory_name = inventory.get('title', '')
-            
-            # サイズフィルタリング
-            if target_sizes:
-                inventory_sizes = extract_sizes(inventory_name)
-                if not inventory_sizes:
-                    continue  # サイズがない場合は除外
-                if not sizes_match(target_sizes, inventory_sizes):
-                    continue  # サイズが一致しない
-            
-            quantity = float(inventory.get('quantity', 0) or 0)
-            
-            # 警告判定: 不足数より在庫が少ない
-            warning = quantity < shortage if shortage > 0 else False
-            
-            # 品番を取得
-            optional_attrs = inventory.get('optional_attributes', [])
-            hinban_value = ''
-            for attr in optional_attrs:
-                if attr.get('name') == '品番':
-                    hinban_value = attr.get('value', '')
-                    break
-            
+    
+    for item in all_inventory:
+        item_code = get_item_code(item)
+        
+        # 同じ分類コードか?
+        if not item_code or not item_code.startswith(category):
+            continue
+        
+        item_name = item.get('title', '')
+        item_quantity = float(item.get('quantity', 0))
+        
+        # サイズ表記の有無
+        has_size = has_size_notation(item_name)
+        
+        # サイズ表記なし = 共通部品 (全サイズで使える)
+        if not has_size:
             related_parts.append({
-                'hinban': hinban_value,
-                'name': inventory_name,
-                'quantity': quantity,
-                'unit': inventory.get('unit', '個'),
-                'zaico_code': inventory.get('code', ''),
-                'updated_at': inventory.get('updated_at', ''),
-                'warning': warning
+                'item_code': item_code,
+                'title': item_name,
+                'quantity': item_quantity,
+                'unit': item.get('unit', ''),
+                'updated_at': item.get('updated_at', ''),
+                'is_common': True,
+                'has_stock': item_quantity > 0,
+                'sizes': []
+            })
+            continue
+        
+        # サイズ表記あり = サイズ一致をチェック
+        item_sizes = extract_sizes_from_name(item_name)
+        
+        if any(size in product_sizes for size in item_sizes):
+            related_parts.append({
+                'item_code': item_code,
+                'title': item_name,
+                'quantity': item_quantity,
+                'unit': item.get('unit', ''),
+                'updated_at': item.get('updated_at', ''),
+                'is_common': False,
+                'has_stock': item_quantity > 0,
+                'sizes': item_sizes
             })
     
-    print(f"  ✓ {len(related_parts)} 件の関連部品を発見（サイズフィルタ適用後）")
+    # ソート: 在庫不足 → 共通部品 → サイズ指定部品
+    related_parts.sort(key=lambda x: (
+        x['has_stock'],
+        not x['is_common'],
+        x['item_code']
+    ))
+    
+    # 在庫状況で分類
+    shortage_parts = [p for p in related_parts if not p['has_stock']]
+    in_stock_parts = [p for p in related_parts if p['has_stock']]
     
     return jsonify({
-        'category': category,
-        'shortage': shortage,
+        'product_code': product_code,
         'product_name': product_name,
-        'target_sizes': list(target_sizes),  # setをlistに変換
-        'parts': related_parts
+        'category_code': category,
+        'sizes_found': product_sizes,
+        'shortage_count': len(shortage_parts),
+        'related_parts': related_parts,
+        'shortage_parts': shortage_parts,
+        'in_stock_parts': in_stock_parts
     })
 
-def extract_sizes(text):
-    """品名からサイズを抽出（mm, A, インチ）"""
-    sizes = set()
-    
-    # mmサイズ: 10mm, 13mm, 16mm, 20mm, 25mm, 32mm etc.
-    mm_matches = re.findall(r'(\d+)\s*mm', text, re.IGNORECASE)
-    for m in mm_matches:
-        sizes.add(int(m))
-    
-    # Aサイズ: 10A, 13A, 16A, 20A, 25A, 32A etc.
-    a_matches = re.findall(r'(\d+)\s*A(?![a-zA-Z])', text)
-    for m in a_matches:
-        sizes.add(int(m))
-    
-    # インチサイズをmmに変換
-    inch_map = {
-        '3/8': 10,
-        '1/2': 13,
-        '5/8': 16,
-        '3/4': 20,
-        '1': 25,
-        '1 1/4': 32,
-        '1 1/2': 40,
-        '2': 50
-    }
-    
-    for inch_str, mm_size in inch_map.items():
-        # インチ表記を検索: ( 1/2 ), (1/2), 1/2
-        if f'({inch_str})' in text or f'( {inch_str} )' in text or f' {inch_str} ' in text:
-            sizes.add(mm_size)
-    
-    return sizes
-
-def sizes_match(sizes1, sizes2):
-    """サイズが一致するか判定"""
-    return bool(sizes1 & sizes2)  # 交差があればTrue
-
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
