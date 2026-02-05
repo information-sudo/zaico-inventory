@@ -663,10 +663,10 @@
                 row.innerHTML = `
                     <td><strong>${item.hinban}</strong></td>
                     <td>${item.name}</td>
-                    <td>${item.required_qty}</td>
-                    <td class="${statusClass}">${item.current_qty}</td>
+                    <td>${Number(item.required_qty) || 0}</td>
+                    <td class="${statusClass}">${Number(item.current_qty) || 0}</td>
                     <td>${item.unit}</td>
-                    <td class="${item.shortage > 0 ? 'status-ng' : ''}">${item.shortage || '-'}</td>
+                    <td class="${item.shortage > 0 ? 'status-ng' : ''}">${Number(item.shortage) || 0}</td>
                     <td style="font-size: 0.9em; color: #666;">${updatedDate}</td>
                     <td><span class="badge ${badgeClass}">${statusText}</span></td>
                 `;
