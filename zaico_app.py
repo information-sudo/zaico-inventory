@@ -32,16 +32,24 @@ def extract_items_from_pdf(pdf_file):
     hinban_list = []
     
     for i, line in enumerate(lines):
-        hinban_match = re.search(r'購入品\s+(\d{4}-\d{2}-[A-Z0-9\-]+?)(\d{3})\s*$', line)
-        if hinban_match:
-            hinban = hinban_match.group(1)
-            quantity = 1
-            if i >= 1:
-                prev_line = lines[i - 1].strip()
-                qty_match = re.match(r'^(\d+)\s+', prev_line)
-                if qty_match:
-                    quantity = int(qty_match.group(1))
-            hinban_list.append({'hinban': hinban, 'quantity': quantity})
+        # 「購入品」を含む行から品番を抽出
+        if '購入品' in line:
+            # 「購入品」より後ろの部分を取得
+            after_kounyuuhin = line.split('購入品', 1)[1]
+            # 品番パターン: xxxx-xx-xx または xxxx-xx-xxx
+            pattern = r'(\d{4}-\d{2}-\d{2,3})(?:\d{3})?'
+            matches = re.findall(pattern, after_kounyuuhin)
+            
+            if matches:
+                # 最後のマッチを品番として採用（図面番号がある場合は後ろの方）
+                hinban = matches[-1]
+                quantity = 1
+                if i >= 1:
+                    prev_line = lines[i - 1].strip()
+                    qty_match = re.match(r'^(\d+)\s+', prev_line)
+                    if qty_match:
+                        quantity = int(qty_match.group(1))
+                hinban_list.append({'hinban': hinban, 'quantity': quantity})
     
     # 重複を除去
     seen = set()
