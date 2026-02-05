@@ -35,14 +35,14 @@ def extract_items_from_pdf(pdf_file):
         # 「購入品」を含む行から品番を抽出
         if '購入品' in line:
             # 「購入品」より後ろの部分を取得
-            after_kounyuuhin = line.split('購入品', 1)[1]
-            # 品番パターン: xxxx-xx-xx または xxxx-xx-xxx
-            pattern = r'(\d{4}-\d{2}-\d{2,3})(?:\d{3})?'
+            after_kounyuuhin = line.split('購入品', 1)[1].strip()
+            # 品番パターン: xxxx-xx-xx または xxxx-xx-xxx + 明細番号3桁
+            pattern = r'(\d{4}-\d{2}-\d{2,3}?)(\d{3})$'
             matches = re.findall(pattern, after_kounyuuhin)
             
             if matches:
-                # 最後のマッチを品番として採用（図面番号がある場合は後ろの方）
-                hinban = matches[-1]
+                # 最後のマッチから品番を取得（図面番号がある場合は後ろの方）
+                hinban, meisai_no = matches[-1]
                 quantity = 1
                 if i >= 1:
                     prev_line = lines[i - 1].strip()
