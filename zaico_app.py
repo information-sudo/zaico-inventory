@@ -370,7 +370,7 @@ def get_related_parts():
         'category': category,
         'shortage': shortage,
         'product_name': product_name,
-        'target_sizes': target_sizes,
+        'target_sizes': list(target_sizes),  # setをlistに変換
         'parts': related_parts
     })
 
