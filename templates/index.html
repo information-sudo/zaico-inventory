@@ -360,7 +360,7 @@
     <div class="container">
         <div class="header">
             <h1>📦 Zaico在庫確認システム</h1>
-            <p>受注伝票PDFをアップロードして在庫状況を確認（サイズなし共通部品対応版）</p>
+            <p>受注伝票PDFをアップロードして在庫状況を確認</p>
         </div>
 
         <div class="content">
@@ -379,7 +379,7 @@
                 <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
                     <div style="flex: 1; min-width: 200px;">
                         <label style="display: block; margin-bottom: 5px; font-weight: bold; color: #333;">品番</label>
-                        <input type="text" id="manualHinban" placeholder="例: 0215-21-13" style="width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                        <input type="text" id="manualHinban" placeholder="例: 1616-01-P010A" style="width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
                     </div>
                     <div style="flex: 0 0 150px;">
                         <label style="display: block; margin-bottom: 5px; font-weight: bold; color: #333;">受注数量</label>
@@ -679,7 +679,8 @@
                 // アクションボタン
                 let actionBtn = '';
                 if (item.status === 'NG' && item.category) {
-                    actionBtn = `<button class="related-btn" onclick="showRelatedParts('${item.category}', ${item.shortage}, '${item.name.replace(/'/g, "\\'")}')">🔍 関連部品</button>`;
+                    const safeName = (item.name || '').replace(/'/g, "\\'");
+                    actionBtn = `<button class="related-btn" onclick="showRelatedParts('${item.category}', ${item.shortage}, '${safeName}')">🔍 関連部品</button>`;
                 }
                 
                 row.innerHTML = `
