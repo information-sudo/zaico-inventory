@@ -313,6 +313,21 @@
             background: #218838;
         }
 
+        .related-btn {
+            background: #17a2b8;
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.9em;
+            white-space: nowrap;
+        }
+
+        .related-btn:hover {
+            background: #138496;
+        }
+
         @media print {
             body {
                 background: white;
@@ -401,6 +416,7 @@
                             <th>不足数</th>
                             <th>更新日</th>
                             <th>状態</th>
+                            <th>アクション</th>
                         </tr>
                     </thead>
                     <tbody id="resultsBody">
@@ -660,6 +676,12 @@
                     }
                 }
                 
+                // アクションボタン
+                let actionBtn = '';
+                if (item.status === 'NG' && item.category) {
+                    actionBtn = `<button class="related-btn" onclick="showRelatedParts('${item.category}', ${item.shortage})">🔍 関連部品</button>`;
+                }
+                
                 row.innerHTML = `
                     <td><strong>${item.hinban}</strong></td>
                     <td>${item.name}</td>
@@ -669,6 +691,7 @@
                     <td class="${item.shortage > 0 ? 'status-ng' : ''}">${Number(item.shortage) || 0}</td>
                     <td style="font-size: 0.9em; color: #666;">${updatedDate}</td>
                     <td><span class="badge ${badgeClass}">${statusText}</span></td>
+                    <td>${actionBtn}</td>
                 `;
                 
                 resultsBody.appendChild(row);
@@ -696,6 +719,80 @@
         function showError(message) {
             errorMessage.textContent = message;
             errorMessage.style.display = 'block';
+        }
+
+        // 関連部品表示
+        async function showRelatedParts(category, shortage) {
+            try {
+                const response = await fetch('/get_related_parts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ category, shortage })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    alert('エラー: ' + (data.error || '関連部品の取得に失敗しました'));
+                    return;
+                }
+                
+                displayRelatedParts(data);
+            } catch (error) {
+                alert('通信エラー: ' + error.message);
+            }
+        }
+
+        function displayRelatedParts(data) {
+            let html = `
+                <div style="background: white; padding: 20px; border-radius: 10px; margin-top: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+                    <h3 style="color: #667eea; margin-bottom: 15px;">🔍 製品分類: ${data.category} の関連部品・製品 (${data.parts.length}件)</h3>
+                    <p style="margin-bottom: 20px; color: #666;">不足数: <strong style="color: #dc3545;">${data.shortage}</strong> → <span style="color: #856404;">⚠️ この数より少ない部品は警告表示</span></p>
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>品番</th>
+                                <th>品名</th>
+                                <th>在庫数</th>
+                                <th>単位</th>
+                                <th>更新日</th>
+                                <th>状態</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            data.parts.forEach(part => {
+                const updatedDate = part.updated_at ? new Date(part.updated_at).toLocaleString('ja-JP') : '-';
+                const warningBadge = part.warning ? '<span class="badge badge-error">⚠️ 警告</span>' : '';
+                const qtyClass = part.warning ? 'status-ng' : (part.quantity > 0 ? 'status-ok' : '');
+                
+                html += `
+                    <tr>
+                        <td><strong>${part.hinban || '-'}</strong></td>
+                        <td>${part.name}</td>
+                        <td class="${qtyClass}">${part.quantity}</td>
+                        <td>${part.unit}</td>
+                        <td style="font-size: 0.9em; color: #666;">${updatedDate}</td>
+                        <td>${warningBadge}</td>
+                    </tr>
+                `;
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                    <button onclick="this.parentElement.remove()" style="margin-top: 15px; background: #6c757d; color: white; padding: 10px 30px; border: none; border-radius: 50px; cursor: pointer;">閉じる</button>
+                </div>
+            `;
+            
+            // 結果テーブルの後に挿入
+            const resultsDiv = document.getElementById('results');
+            const relatedDiv = document.createElement('div');
+            relatedDiv.innerHTML = html;
+            resultsDiv.appendChild(relatedDiv);
         }
     </script>
 </body>
