@@ -109,7 +109,7 @@ def load_all_inventories():
     all_inventories = []
     
     try:
-        total_pages = min(get_total_pages(), 20)  # 最大20ページ
+        total_pages = min(get_total_pages(), 100)  # 最大20ページ
         print(f"📄 全 {total_pages} ページを取得します...")
         
         for page in range(1, total_pages + 1):
