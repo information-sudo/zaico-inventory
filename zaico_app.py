@@ -12,6 +12,10 @@ app = Flask(__name__)
 ZAICO_API_TOKEN = "jrmXaweTqNZdPN9HCiSF7VGskW2NBCPY"
 ZAICO_API_BASE_URL = "https://web.zaico.co.jp/api/v1"
 
+class InventoryFetchError(Exception):
+    """Zaico から在庫一覧を取り切れなかった（鍵の無効・通信失敗・ページの欠け）"""
+
+
 # キャッシュ設定
 inventory_cache = {
     'data': [],
@@ -124,7 +128,10 @@ def load_all_inventories():
             
             if response.status_code != 200:
                 print(f"❌ 失敗 (status: {response.status_code})")
-                continue
+                # 1ページでも欠けたまま続けると、欠けた品番が「未登録」に見えてしまう
+                raise InventoryFetchError(
+                    f"Zaico API から在庫を取得できませんでした (status {response.status_code})"
+                )
             
             data = response.json()
             
@@ -135,7 +142,10 @@ def load_all_inventories():
             all_inventories.extend(data)
             print(f"✓ {len(data)}件")
         
-        # キャッシュを更新
+        if not all_inventories:
+            raise InventoryFetchError("Zaico API から在庫データを取得できませんでした（0件）")
+        
+        # キャッシュを更新（全ページ取り切れた時だけ）
         inventory_cache['data'] = all_inventories
         inventory_cache['timestamp'] = datetime.now()
         
@@ -143,22 +153,19 @@ def load_all_inventories():
         
         return all_inventories
         
+    except InventoryFetchError as e:
+        print(f"❌ エラー: {e}")
+        raise
     except Exception as e:
         print(f"❌ エラー: {e}")
-        return []
+        raise InventoryFetchError(f"Zaico API との通信に失敗しました: {e}")
 
 def search_zaico_inventory(hinban):
     """キャッシュから品番を検索"""
     print(f"🔍 品番 {hinban} を検索中...")
     
-    # 全在庫データを取得（キャッシュから）
+    # 全在庫データを取得（キャッシュから）。取れなければ InventoryFetchError
     all_inventories = load_all_inventories()
-    
-    if not all_inventories:
-        return {
-            'success': False,
-            'error': '在庫データの取得に失敗しました'
-        }
     
     # キャッシュから検索
     for inventory in all_inventories:
@@ -210,7 +217,10 @@ def check_hinban():
         return jsonify({'success': False, 'error': '品番を入力してください'}), 400
     
     print(f"\n=== 品番検索: {hinban} ===")
-    result = search_zaico_inventory(hinban)
+    try:
+        result = search_zaico_inventory(hinban)
+    except InventoryFetchError as e:
+        return jsonify({'success': False, 'error': str(e)}), 502
     
     if result['success']:
         return jsonify(result)
@@ -246,6 +256,9 @@ def check_inventory():
         print(f"=== 在庫確認完了 ===\n")
         return jsonify({'results': results})
     
+    except InventoryFetchError as e:
+        # 在庫一覧が取れていないのに「Zaico未登録」と出さない
+        return jsonify({'error': str(e)}), 502
     except Exception as e:
         return jsonify({'error': f'処理中にエラーが発生しました: {str(e)}'}), 500
 
@@ -264,6 +277,9 @@ def check_manual_inventory():
         print(f"=== 在庫確認完了 ===\n")
         return jsonify({'results': results})
     
+    except InventoryFetchError as e:
+        # 在庫一覧が取れていないのに「Zaico未登録」と出さない
+        return jsonify({'error': str(e)}), 502
     except Exception as e:
         return jsonify({'error': f'処理中にエラーが発生しました: {str(e)}'}), 500
 
@@ -329,7 +345,10 @@ def get_related_parts():
     print(f"  抽出されたサイズ: {list(target_sizes)}")
     
     # 全在庫データから同じ製品分類を検索
-    all_inventories = load_all_inventories()
+    try:
+        all_inventories = load_all_inventories()
+    except InventoryFetchError as e:
+        return jsonify({'error': str(e)}), 502
     
     related_parts = []
     for inventory in all_inventories:
