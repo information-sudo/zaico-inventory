@@ -1,7 +1,7 @@
 import os
 from flask import Flask, render_template, request, jsonify
 import requests
-import PyPDF2
+import pypdf
 import re
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -23,7 +23,7 @@ def extract_items_from_pdf(pdf_file):
     """受注票PDFから品番と数量を抽出"""
     items = []
     
-    pdf_reader = PyPDF2.PdfReader(pdf_file)
+    pdf_reader = pypdf.PdfReader(pdf_file)
     text = ""
     for page in pdf_reader.pages:
         text += page.extract_text()
