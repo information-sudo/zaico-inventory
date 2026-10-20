@@ -9,8 +9,12 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 
 # Zaico API設定
-ZAICO_API_TOKEN = "jrmXaweTqNZdPN9HCiSF7VGskW2NBCPY"
+# 鍵はコードに書かず、環境変数 ZAICO_API_TOKEN から読む（Render は Environment 画面で設定）
+ZAICO_API_TOKEN = os.environ.get("ZAICO_API_TOKEN", "").strip()
 ZAICO_API_BASE_URL = "https://web.zaico.co.jp/api/v1"
+
+if not ZAICO_API_TOKEN:
+    print("⚠ 環境変数 ZAICO_API_TOKEN が設定されていません。在庫確認は失敗します")
 
 # キャッシュ設定
 inventory_cache = {
@@ -98,6 +102,10 @@ def load_all_inventories():
         if elapsed.total_seconds() < inventory_cache['ttl']:
             print(f"✓ キャッシュを使用（残り有効時間: {int(inventory_cache['ttl'] - elapsed.total_seconds())}秒）")
             return inventory_cache['data']
+    
+    if not ZAICO_API_TOKEN:
+        print("❌ 環境変数 ZAICO_API_TOKEN が未設定のため在庫を取得できません")
+        return []
     
     print("📦 全在庫データを取得中...")
     
